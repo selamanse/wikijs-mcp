@@ -9,39 +9,41 @@ adopts and re-persists automatically.
 
 Commands (wired into ``wikijs-mcp``):
 
-- ``wikijs-mcp login``            one-time browser login, extracts the ``jwt``
-                                  cookie and stores it.
+- ``wikijs-mcp login``            open ``{url}/login`` in your standard
+                                  browser, then paste the ``jwt`` cookie value
+                                  from the browser devtools.
 - ``wikijs-mcp session-status``   show auth mode, token source, masked token
                                   and expiry — without printing the token.
+
+When stdin is *not* a terminal the token is read from stdin instead of being
+prompted for (scripting / CI use)::
+
+    echo '<jwt>' | wikijs-mcp login --url https://wiki.example.com
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import stat
 import sys
-import time
+import webbrowser
 from datetime import datetime
-from importlib import util as _import_util
 
 from . import session as session_store
 from .config import WikiJSConfig
-
-DEFAULT_LOGIN_TIMEOUT = 300  # seconds to wait for the user to complete SSO
-
-
-def _has_playwright() -> bool:
-    return _import_util.find_spec("playwright") is not None
 
 
 def _build_login_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wikijs-mcp login",
         description=(
-            "One-time browser login via SSO/Authentik. Opens the Wiki.js login "
-            "page, waits for the user to authenticate, extracts the 'jwt' "
-            "cookie and stores it in the session-token file (chmod 600)."
+            "Open the Wiki.js login page in your standard browser, then store "
+            "the session JWT. After logging in (SSO/Authentik), copy the 'jwt' "
+            "cookie value from the browser devtools and paste it. The token is "
+            "stored with chmod 600 and refreshed automatically via the "
+            "'new-jwt' response header."
         ),
     )
     parser.add_argument(
@@ -49,84 +51,40 @@ def _build_login_parser() -> argparse.ArgumentParser:
         default="",
         help="Wiki.js base URL (default: WIKIJS_URL environment variable).",
     )
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        help="Run Chromium headless (no visible browser window).",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=DEFAULT_LOGIN_TIMEOUT,
-        help=f"Seconds to wait for SSO to complete (default: {DEFAULT_LOGIN_TIMEOUT}).",
-    )
     return parser
 
 
-def _extract_jwt_cookie(browser_context) -> str | None:
-    """Return the first non-empty ``jwt`` cookie from the browser context."""
-    for cookie in browser_context.cookies():
-        if cookie.get("name") == "jwt" and cookie.get("value"):
-            return cookie["value"]
-    return None
-
-
-def _browser_login(url: str, headless: bool, timeout: int) -> str | None:
-    """Drive the SSO login and return the ``jwt`` cookie value (or ``None``).
-
-    Behaviour on only-OIDC setups: Wiki.js renders a login page that usually
-    shows the SSO provider button and may auto-redirect straight to Authentik.
-    Either way, after the user authenticates the browser lands back on Wiki.js
-    and the ``jwt`` cookie is set — so this function simply polls for the
-    cookie until the deadline, regardless of how many redirects occurred.
-    """
-    from playwright.sync_api import sync_playwright
-
+def _open_login_page(url: str) -> None:
+    """Open the Wiki.js login page in the OS default browser."""
     login_url = f"{url.rstrip('/')}/login"
-    print(f"Opening {login_url} in the browser...")
-    print(
-        "Please complete the SSO login in the browser window. "
-        f"(waiting up to {timeout}s)"
-    )
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context()
-        page = context.new_page()
-        try:
-            page.goto(login_url, wait_until="domcontentloaded", timeout=30_000)
-        except Exception as exc:  # noqa: BLE001 - page may still render
-            print(f"Warning: could not load {login_url}: {exc}", file=sys.stderr)
-
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            token = _extract_jwt_cookie(context)
-            if token:
-                return token
-            time.sleep(0.75)
-
-        # The login page may need a manual click on the SSO button; surface the
-        # most likely cause clearly instead of a bare timeout.
+    print(f"Opening {login_url} in your standard browser ...")
+    if not webbrowser.open(login_url):
         print(
-            f"No 'jwt' cookie appeared within {timeout}s. Make sure you "
-            "completed the SSO login (if the wiki only exposes OIDC, the login "
-            "page usually shows an Authentik button or redirects automatically).",
+            f"Could not open a browser automatically. Please open this URL "
+            f"manually:\n  {login_url}",
             file=sys.stderr,
         )
-        return None
+
+
+def _read_pasted_token() -> str:
+    """Read the ``jwt`` cookie value from the user (hidden prompt or stdin)."""
+    if not sys.stdin.isatty():
+        # Piped usage: read the token from stdin.
+        return sys.stdin.read().strip()
+    print(
+        "Log in to the wiki (SSO/Authentik) in the browser, then copy the 'jwt'\n"
+        "cookie value: devtools (F12) -> Application -> Cookies -> 'jwt'.\n"
+        "Paste it below and press Enter (input is hidden)."
+    )
+    try:
+        return getpass.getpass("jwt cookie: ").strip()
+    except (EOFError, OSError):  # pragma: no cover - non-interactive edge case
+        return ""
 
 
 def run_login(argv: list[str] | None = None) -> int:
-    """Run the interactive ``wikijs-mcp login`` command. Returns an exit code."""
+    """Run the ``wikijs-mcp login`` command. Returns an exit code."""
     args = _build_login_parser().parse_args(argv)
-
-    if not _has_playwright():
-        print(
-            "The 'login' command requires the optional Playwright extra.\n"
-            "  pip install 'wikijs-mcp[login]'     (or: uv tool install . --extra login)\n"
-            "  playwright install chromium",
-            file=sys.stderr,
-        )
-        return 1
 
     url = (args.url or WikiJSConfig.load_config().url).strip().rstrip("/")
     if not url:
@@ -136,18 +94,34 @@ def run_login(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    token = _browser_login(url, headless=args.headless, timeout=args.timeout)
-    if token is None:
+    if sys.stdin.isatty():
+        _open_login_page(url)
+
+    token = _read_pasted_token()
+    if not token:
+        print("No token was provided; nothing stored.", file=sys.stderr)
         return 2
 
-    session_store.write_session_token(token)
+    try:
+        session_store.write_session_token(token)
+    except (ValueError, OSError) as exc:
+        print(f"error: could not store the session token: {exc}", file=sys.stderr)
+        return 2
+
     print(
         f"Session token stored at {session_store.token_path()} (chmod 600).\n"
         "The MCP client refreshes it automatically via the 'new-jwt' response "
-        "header. Role hint: map the Authentik group (mapGroups) to a Wiki.js "
+        "header.\nRole hint: map the Authentik group (mapGroups) to a Wiki.js "
         "role granting read:pages, manage:pages, read:assets, write:assets, "
         "manage:assets."
     )
+    exp = session_store.jwt_expiry(token)
+    if exp is not None:
+        dt = datetime.fromtimestamp(exp)
+        remaining_min = max(0, int((dt - datetime.now()).total_seconds() // 60))
+        print(f"Expires: {dt.strftime('%Y-%m-%d %H:%M:%S')} (in {remaining_min} min)")
+    else:
+        print("Expires: <unknown / not a JWT>")
     return 0
 
 

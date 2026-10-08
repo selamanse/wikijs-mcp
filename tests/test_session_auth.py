@@ -307,6 +307,77 @@ class TestSessionAuthRenewal:
 
 
 # ----------------------------------------------------------------------
+# Login command (standard browser + manual cookie paste)
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestSessionAuthLoginCommand:
+    """``wikijs-mcp login`` opens the standard browser and stores the pasted JWT."""
+
+    def test_run_login_no_url_returns_error(self, capsys):
+        from wikijs_mcp import login
+
+        rc = login.run_login([])
+
+        assert rc == 2
+        assert "WIKIJS_URL" in capsys.readouterr().err
+
+    def test_run_login_stores_pasted_token(self, tmp_path, monkeypatch, capsys):
+        from wikijs_mcp import login
+
+        monkeypatch.setenv("WIKIJS_URL", "https://wiki.example.com")
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(login.webbrowser, "open", lambda url: True)
+        monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "jwt.abc.def")
+
+        rc = login.run_login([])
+
+        assert rc == 0
+        target = tmp_path / "session-token"
+        assert target.read_text() == "jwt.abc.def"
+        assert (target.stat().st_mode & 0o777) == 0o600
+        # The login page is opened in the standard browser.
+        assert "wiki.example.com/login" in capsys.readouterr().out
+
+    def test_run_login_reads_piped_input(self, tmp_path, monkeypatch):
+        from wikijs_mcp import login
+
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr(
+            "sys.stdin",
+            type(
+                "FakeStdin",
+                (),
+                {
+                    "read": staticmethod(lambda: "pipe.jwt.xyz\n"),
+                    "isatty": staticmethod(lambda: False),
+                },
+            )(),
+        )
+
+        rc = login.run_login(["--url", "https://wiki.example.com"])
+
+        assert rc == 0
+        assert (tmp_path / "session-token").read_text() == "pipe.jwt.xyz"
+
+    def test_run_login_empty_token_errors(self, tmp_path, monkeypatch):
+        from wikijs_mcp import login
+
+        monkeypatch.setenv("WIKIJS_URL", "https://wiki.example.com")
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(login.webbrowser, "open", lambda url: True)
+        monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "   ")
+
+        rc = login.run_login([])
+
+        assert rc == 2
+        assert not (tmp_path / "session-token").exists()
+
+
+# ----------------------------------------------------------------------
 # Server integration in session mode
 # ----------------------------------------------------------------------
 
