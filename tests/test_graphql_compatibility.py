@@ -229,3 +229,116 @@ class TestGraphQLCompatibility:
         # Check forbidden fields are not present
         for field in should_not_contain:
             assert field not in query
+
+    # --- comments query structure ---
+
+    async def test_list_comments_query_structure(self, mock_wiki_config):
+        """Test the comments.list query sends locale + path (no pageId/offset)."""
+        client = WikiJSClient(mock_wiki_config)
+
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"data": {"comments": {"list": []}}}
+        client.client.post = AsyncMock(return_value=mock_response)
+
+        await client.list_comments("docs/test-page")
+
+        call_args = client.client.post.call_args
+        payload = call_args[1]["json"]
+        query = payload["query"]
+        variables = payload["variables"]
+
+        assert "query ListComments($locale: String!, $path: String!)" in query
+        assert "list(locale: $locale, path: $path)" in query
+
+        # Verified live: list takes locale + path, NOT pageId, NOT offset.
+        assert "pageId" not in query
+        assert "offset" not in query
+        assert "authorEmail" not in query  # returns Forbidden on live instance
+
+        # Both variables are always sent.
+        assert variables["locale"] == "de"
+        assert variables["path"] == "docs/test-page"
+
+    async def test_create_comment_query_structure(self, mock_wiki_config):
+        """Test the comments.create mutation sends pageId + content."""
+        client = WikiJSClient(mock_wiki_config)
+
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "data": {
+                "comments": {
+                    "create": {
+                        "responseResult": {"succeeded": True, "errorCode": 0}
+                    }
+                }
+            }
+        }
+        client.client.post = AsyncMock(return_value=mock_response)
+
+        await client.create_comment(42, "Hello")
+
+        call_args = client.client.post.call_args
+        payload = call_args[1]["json"]
+        query = payload["query"]
+        variables = payload["variables"]
+
+        assert "mutation CreateComment($pageId: Int!, $content: String!)" in query
+        assert "create(pageId: $pageId, content: $content)" in query
+        assert variables == {"pageId": 42, "content": "Hello"}
+
+    async def test_update_comment_query_structure(self, mock_wiki_config):
+        """Test the comments.update mutation sends id + content."""
+        client = WikiJSClient(mock_wiki_config)
+
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "data": {
+                "comments": {
+                    "update": {
+                        "responseResult": {"succeeded": True, "errorCode": 0}
+                    }
+                }
+            }
+        }
+        client.client.post = AsyncMock(return_value=mock_response)
+
+        await client.update_comment(100, "Updated")
+
+        call_args = client.client.post.call_args
+        payload = call_args[1]["json"]
+        query = payload["query"]
+        variables = payload["variables"]
+
+        assert "mutation UpdateComment($id: Int!, $content: String!)" in query
+        assert "update(id: $id, content: $content)" in query
+        assert variables == {"id": 100, "content": "Updated"}
+
+    async def test_delete_comment_query_structure(self, mock_wiki_config):
+        """The comments mutation is named delete, not remove (regression guard)."""
+        client = WikiJSClient(mock_wiki_config)
+
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "data": {
+                "comments": {
+                    "delete": {
+                        "responseResult": {"succeeded": True, "errorCode": 0}
+                    }
+                }
+            }
+        }
+        client.client.post = AsyncMock(return_value=mock_response)
+
+        await client.delete_comment(100)
+
+        call_args = client.client.post.call_args
+        payload = call_args[1]["json"]
+        query = payload["query"]
+
+        assert "mutation DeleteComment($id: Int!)" in query
+        assert "delete(id: $id)" in query
+        assert "remove" not in query  # The mutation is 'delete', NOT 'remove'

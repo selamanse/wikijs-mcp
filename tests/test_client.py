@@ -1286,3 +1286,194 @@ class TestWikiJSClient:
 
         # Should return empty list, empty dict, or None without raising
         assert result in ([], None, {})
+
+    # --- comments tests ---
+
+    async def test_list_comments_success(
+        self, mock_wiki_config, sample_comment_list
+    ):
+        """Test successful comment listing."""
+        client = WikiJSClient(mock_wiki_config)
+
+        comments_response = {"comments": {"list": sample_comment_list}}
+        client._execute_query = AsyncMock(return_value=comments_response)
+
+        result = await client.list_comments("docs/test-page", "en")
+
+        assert len(result) == 2
+        assert result[0]["id"] == 100
+        assert result[0]["authorName"] == "Test User"
+
+        call_args = client._execute_query.call_args
+        variables = call_args[0][1]
+        assert variables == {"locale": "en", "path": "docs/test-page"}
+
+    async def test_list_comments_default_locale(
+        self, mock_wiki_config, sample_comment_list
+    ):
+        """Test comment listing without an explicit locale (falls back to 'de')."""
+        client = WikiJSClient(mock_wiki_config)
+
+        client._execute_query = AsyncMock(
+            return_value={"comments": {"list": sample_comment_list}}
+        )
+
+        await client.list_comments("docs/test-page")
+
+        call_args = client._execute_query.call_args
+        variables = call_args[0][1]
+        assert variables["locale"] == "de"
+        assert variables["path"] == "docs/test-page"
+
+    async def test_list_comments_empty(self, mock_wiki_config):
+        """Test comment listing with no comments."""
+        client = WikiJSClient(mock_wiki_config)
+
+        client._execute_query = AsyncMock(return_value={"comments": {"list": []}})
+        result = await client.list_comments("docs/test-page", "en")
+
+        assert result == []
+
+    async def test_list_comments_missing_data(self, mock_wiki_config):
+        """Test comment listing with a missing 'comments' block."""
+        client = WikiJSClient(mock_wiki_config)
+
+        client._execute_query = AsyncMock(return_value={})
+        result = await client.list_comments("docs/test-page", "en")
+
+        assert result == []
+
+    async def test_create_comment_success(self, mock_wiki_config):
+        """Test successful comment creation."""
+        client = WikiJSClient(mock_wiki_config)
+
+        create_response = {
+            "comments": {
+                "create": {
+                    "responseResult": {
+                        "succeeded": True,
+                        "errorCode": 0,
+                        "message": "Comment created",
+                    }
+                }
+            }
+        }
+        client._execute_query = AsyncMock(return_value=create_response)
+
+        result = await client.create_comment(42, "Nice page!")
+
+        assert result["responseResult"]["succeeded"] is True
+
+        call_args = client._execute_query.call_args
+        variables = call_args[0][1]
+        assert variables == {"pageId": 42, "content": "Nice page!"}
+
+    async def test_create_comment_failure(self, mock_wiki_config):
+        """Test comment creation failure when GraphQL returns error."""
+        client = WikiJSClient(mock_wiki_config)
+
+        failed_response = {
+            "comments": {
+                "create": {
+                    "responseResult": {
+                        "succeeded": False,
+                        "errorCode": 403,
+                        "message": "Comment creation failed",
+                    }
+                }
+            }
+        }
+        client._execute_query = AsyncMock(return_value=failed_response)
+
+        with pytest.raises(Exception, match="Failed to create comment"):
+            await client.create_comment(42, "Nice page!")
+
+    async def test_update_comment_success(self, mock_wiki_config):
+        """Test successful comment update."""
+        client = WikiJSClient(mock_wiki_config)
+
+        update_response = {
+            "comments": {
+                "update": {
+                    "responseResult": {
+                        "succeeded": True,
+                        "errorCode": 0,
+                        "message": "Comment updated",
+                    }
+                }
+            }
+        }
+        client._execute_query = AsyncMock(return_value=update_response)
+
+        result = await client.update_comment(100, "Updated content")
+
+        assert result["responseResult"]["succeeded"] is True
+
+        call_args = client._execute_query.call_args
+        variables = call_args[0][1]
+        assert variables == {"id": 100, "content": "Updated content"}
+
+    async def test_update_comment_failure(self, mock_wiki_config):
+        """Test comment update failure."""
+        client = WikiJSClient(mock_wiki_config)
+
+        failed_response = {
+            "comments": {
+                "update": {
+                    "responseResult": {
+                        "succeeded": False,
+                        "errorCode": 404,
+                        "message": "Comment not found",
+                    }
+                }
+            }
+        }
+        client._execute_query = AsyncMock(return_value=failed_response)
+
+        with pytest.raises(Exception, match="Failed to update comment"):
+            await client.update_comment(999, "nope")
+
+    async def test_delete_comment_success(self, mock_wiki_config):
+        """Test successful comment deletion."""
+        client = WikiJSClient(mock_wiki_config)
+
+        delete_response = {
+            "comments": {
+                "delete": {
+                    "responseResult": {
+                        "succeeded": True,
+                        "errorCode": 0,
+                        "message": "Comment deleted",
+                    }
+                }
+            }
+        }
+        client._execute_query = AsyncMock(return_value=delete_response)
+
+        result = await client.delete_comment(100)
+
+        assert result["responseResult"]["succeeded"] is True
+
+        call_args = client._execute_query.call_args
+        variables = call_args[0][1]
+        assert variables == {"id": 100}
+
+    async def test_delete_comment_failure(self, mock_wiki_config):
+        """Test comment deletion failure."""
+        client = WikiJSClient(mock_wiki_config)
+
+        failed_response = {
+            "comments": {
+                "delete": {
+                    "responseResult": {
+                        "succeeded": False,
+                        "errorCode": 500,
+                        "message": "Comment deletion failed",
+                    }
+                }
+            }
+        }
+        client._execute_query = AsyncMock(return_value=failed_response)
+
+        with pytest.raises(Exception, match="Failed to delete comment"):
+            await client.delete_comment(999)

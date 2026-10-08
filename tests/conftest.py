@@ -147,6 +147,37 @@ def sample_site_config():
     }
 
 
+@pytest.fixture
+def sample_comment_data():
+    """Sample comment data for testing."""
+    return {
+        "id": 100,
+        "content": "Just a test comment.",
+        "authorName": "Test User",
+        "createdAt": "2024-01-01T00:00:00Z",
+    }
+
+
+@pytest.fixture
+def sample_comment_list(sample_comment_data):
+    """Sample list of comments for testing."""
+    return [
+        sample_comment_data,
+        {
+            "id": 101,
+            "content": "A second comment.",
+            "authorName": "Another User",
+            "createdAt": "2024-01-02T00:00:00Z",
+        },
+    ]
+
+
+@pytest.fixture
+def sample_comment_response_result():
+    """A successful `responseResult` as returned by comment mutations."""
+    return {"succeeded": True, "errorCode": 0, "message": "Operation successful."}
+
+
 @pytest.fixture(autouse=True)
 def clean_env():
     """Clean environment variables before each test."""

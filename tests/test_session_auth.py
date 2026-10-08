@@ -234,6 +234,29 @@ class TestSessionAuthClientHeaders:
         call = client.client.post.call_args
         assert call.kwargs["headers"]["Authorization"] == "Bearer jwt-file"
 
+    async def test_list_comments_sends_session_header(self, tmp_path, monkeypatch):
+        """list_comments works with session auth from a token file."""
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        (tmp_path / "session-token").write_text("jwt-comments")
+
+        config = WikiJSConfig(url="https://wiki.example.com", auth_mode="session")
+        client = WikiJSClient(config)
+
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "data": {"comments": {"list": [{"id": 1, "content": "hi"}]}}
+        }
+        mock_response.headers = {}
+        client.client.post = AsyncMock(return_value=mock_response)
+
+        results = await client.list_comments("docs/test")
+
+        assert len(results) == 1
+        call = client.client.post.call_args
+        assert call.kwargs["headers"]["Authorization"] == "Bearer jwt-comments"
+        assert call.kwargs["json"]["variables"]["path"] == "docs/test"
+
 
 class TestSessionAuthRenewal:
     """Reactive renewal via the ``new-jwt`` response header."""
@@ -659,3 +682,34 @@ class TestSessionAuthServer:
         # The client was constructed with the session-mode config.
         mock_client_class.assert_called_once()
         assert mock_client_class.call_args.args[0].auth_mode == "session"
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_server_list_comments_in_session_mode(
+        self, mock_client_class, mock_load_config, sample_comment_list
+    ):
+        """The comments tools work with a session-mode config (no admin PAT)."""
+        mock_load_config.return_value = WikiJSConfig(
+            url="https://wiki.example.com",
+            auth_mode="session",
+            session_token="jwt-token",
+        )
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.list_comments.return_value = sample_comment_list
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+        result = await server.app.call_tool(
+            "wiki_list_comments", {"path": "docs/session-page"}
+        )
+
+        text = get_tool_response_text(result)
+        assert "Found 2 comment(s)" in text
+        assert "Test User" in text
+        # The client ran authenticated in session mode.
+        assert mock_client_class.call_args.args[0].auth_mode == "session"
+        mock_client_instance.list_comments.assert_awaited_once_with(
+            "docs/session-page", None
+        )

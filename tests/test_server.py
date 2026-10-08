@@ -2098,6 +2098,289 @@ class TestWikiJSMCPServer:
         assert "No assets found" in get_tool_response_text(result)
         mock_client_instance.asset_list.assert_awaited_once_with(5, "ALL")
 
+    # --- comments tools ---
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_comments_by_path(
+        self, mock_client_class, mock_load_config, mock_wiki_config, sample_comment_list
+    ):
+        """Test wiki_list_comments with a page path."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.list_comments.return_value = sample_comment_list
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_list_comments", {"path": "docs/test-page"}
+        )
+        text = get_tool_response_text(result)
+        assert "Found 2 comment(s)" in text
+        assert "**Comment ID:** 100" in text
+        assert "**Author:** Test User" in text
+        assert "Just a test comment." in text
+        mock_client_instance.list_comments.assert_awaited_once_with(
+            "docs/test-page", None
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_comments_by_page_id(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_list_comments with a page_id resolves the page path."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_by_id.return_value = {
+            "id": 42,
+            "path": "docs/resolved-page",
+        }
+        mock_client_instance.list_comments.return_value = []
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_list_comments", {"page_id": 42}
+        )
+        text = get_tool_response_text(result)
+        assert "No comments found for page: docs/resolved-page" in text
+        mock_client_instance.get_page_by_id.assert_awaited_once()
+        mock_client_instance.list_comments.assert_awaited_once_with(
+            "docs/resolved-page", None
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_comments_page_id_not_found(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_list_comments with an unknown page_id."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.get_page_by_id.return_value = None
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_list_comments", {"page_id": 999}
+        )
+        assert "Page with ID 999 not found" in get_tool_response_text(result)
+        mock_client_instance.list_comments.assert_not_awaited()
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_comments_requires_path_or_id(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_list_comments validation: exactly one of path/page_id."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ToolError, match="path.*page_id"):
+            await server.app.call_tool("wiki_list_comments", {})
+        with pytest.raises(ToolError, match="path.*page_id"):
+            await server.app.call_tool(
+                "wiki_list_comments", {"path": "a", "page_id": 1}
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_list_comments_permission_hint(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Forbidden listing surfaces a read:comments hint."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.list_comments.side_effect = Exception("GraphQL query failed")
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        with pytest.raises(Exception, match="read:comments"):
+            await server.app.call_tool(
+                "wiki_list_comments", {"path": "docs/test-page"}
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_create_comment_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_create_comment."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.create_comment.return_value = {
+            "responseResult": {"succeeded": True, "errorCode": 0}
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_create_comment", {"page_id": 42, "content": "Test comment"}
+        )
+        text = get_tool_response_text(result)
+        assert "Successfully created comment on page with ID: 42" in text
+        mock_client_instance.create_comment.assert_awaited_once_with(
+            42, "Test comment"
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_create_comment_rejects_empty(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Empty comment content is rejected."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ToolError, match="must not be empty"):
+            await server.app.call_tool(
+                "wiki_create_comment", {"page_id": 1, "content": "   "}
+            )
+        with pytest.raises(ToolError, match="must not be empty"):
+            await server.app.call_tool(
+                "wiki_create_comment", {"page_id": 1, "content": ""}
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_create_comment_permission_hint(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Failing creation surfaces a write:comments hint."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.create_comment.side_effect = Exception("Forbidden")
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        with pytest.raises(Exception, match="write:comments"):
+            await server.app.call_tool(
+                "wiki_create_comment", {"page_id": 1, "content": "hello"}
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_update_comment_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_update_comment."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.update_comment.return_value = {
+            "responseResult": {"succeeded": True, "errorCode": 0}
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_update_comment", {"comment_id": 100, "content": "Updated"}
+        )
+        text = get_tool_response_text(result)
+        assert "Successfully updated comment with ID: 100" in text
+        mock_client_instance.update_comment.assert_awaited_once_with(100, "Updated")
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_update_comment_rejects_empty(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Empty update content is rejected."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        with pytest.raises(ToolError, match="must not be empty"):
+            await server.app.call_tool(
+                "wiki_update_comment", {"comment_id": 100, "content": ""}
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_update_comment_permission_hint(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Failing update surfaces a manage:comments hint."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.update_comment.side_effect = Exception("Forbidden")
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        with pytest.raises(Exception, match="manage:comments"):
+            await server.app.call_tool(
+                "wiki_update_comment", {"comment_id": 100, "content": "x"}
+            )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_delete_comment_success(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_delete_comment."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.delete_comment.return_value = {
+            "responseResult": {"succeeded": True, "errorCode": 0}
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool("wiki_delete_comment", {"comment_id": 100})
+        text = get_tool_response_text(result)
+        assert "Successfully deleted comment with ID: 100" in text
+        mock_client_instance.delete_comment.assert_awaited_once_with(100)
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_delete_comment_permission_hint(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Failing deletion surfaces a manage:comments hint."""
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.delete_comment.side_effect = Exception("Forbidden")
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        with pytest.raises(Exception, match="manage:comments"):
+            await server.app.call_tool("wiki_delete_comment", {"comment_id": 100})
+
 
 @pytest.mark.integration
 class TestMainFunction:
