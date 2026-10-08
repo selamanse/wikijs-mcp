@@ -401,6 +401,33 @@ are sanitized server-side to lowercase with spaces/`,`/`;`/`#` replaced by
 underscores (e.g. `Report Final (2).PDF` → `report_final_2_.pdf`); the client
 mirrors this so it can report the expected final names.
 
+## Comments
+
+Page comments can be listed and managed via four tools:
+
+- `wiki_list_comments(path, page_id, locale)` — list the comments of a page.
+  Accepts a `path` **or** a `page_id` (exactly one); with `page_id` the page
+  path is resolved internally.
+- `wiki_create_comment(page_id, content)` — add a comment. The content is
+  rendered as markdown and attributed to the authenticated user, so in session
+  auth it appears under your own wiki user.
+- `wiki_update_comment(comment_id, content)` — replace a comment's content.
+- `wiki_delete_comment(comment_id)` — delete a comment (irreversible).
+
+### Permission notes
+
+- Listing comments requires the `read:comments` permission on the page.
+- Creating comments requires `write:comments` on the page.
+- Updating/deleting comments requires `manage:comments` on the page.
+- These are **page-rule permissions** (`mayOnPage`), not API-route rights —
+  a session user may be able to comment on some pages but not others.
+
+### API notes
+
+- The list query takes `locale` + `path` — **not** `pageId`.
+- The delete mutation is named `delete` (`comments.delete`), **not** `remove`.
+- `authorEmail` must not be requested — the live instance answers `Forbidden`.
+
 ## SSO / Authentik session auth (lokal)
 
 Instead of an admin personal access token you can connect to Wiki.js as a
@@ -548,6 +575,10 @@ them again, leaving no residue.
 | `wiki_create_asset_folder` | Create an asset folder (slug is lowercased) |
 | `wiki_rename_asset` | Rename an asset (keep the same extension) |
 | `wiki_delete_asset` | Delete an asset |
+| `wiki_list_comments` | List comments of a page by path or numeric page ID |
+| `wiki_create_comment` | Create a comment on a page (content is markdown) |
+| `wiki_update_comment` | Update a comment by comment ID |
+| `wiki_delete_comment` | Delete a comment by comment ID (irreversible) |
 
 ## Security considerations
 

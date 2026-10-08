@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Comment tools** for managing page comments:
+  - `wiki_list_comments(path, page_id, locale)` — `comments.list` (takes
+    `locale` + `path`, **not** `pageId`), returns id, content, author and
+    createdAt. Accepts a page `path` or a numeric `page_id` (exactly one);
+    with `page_id` the page path is resolved internally. Requires
+    `read:comments` on the page.
+  - `wiki_create_comment(page_id, content)` — `comments.create`, requires
+    `write:comments`. The comment is attributed to the authenticated user.
+  - `wiki_update_comment(comment_id, content)` — `comments.update`, requires
+    `manage:comments`.
+  - `wiki_delete_comment(comment_id)` — uses the `comments.delete` mutation
+    (named `delete`, **not** `remove`), requires `manage:comments`.
+- Client support for comments: `list_comments`, `create_comment`,
+  `update_comment`, `delete_comment`. Comment permissions are page-rule
+  permissions (`mayOnPage`), not API-route rights.
+- Permission hints in error messages (`read:comments`, `write:comments`,
+  `manage:comments`) and an `authorEmail` guard (returns `Forbidden` on the
+  live instance, so it is not requested).
+
+### Changed
+
+- The MCP server now registers 21 tools (17 before).
+
 ## [1.2.0] - 2026-10-08
 
 Fork release. This release fixes the locale handling (English is now only a
