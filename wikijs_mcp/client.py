@@ -10,9 +10,15 @@ from typing import Any
 import httpx
 import truststore
 
+from . import session as session_store
 from .config import WikiJSConfig
 
 logger = logging.getLogger(__name__)
+
+# Response header through which Wiki.js hands back a refreshed JWT for the
+# current session. When present, the client adopts the new token and persists
+# it to the session-token file so later processes start with the fresh value.
+NEW_JWT_HEADER = "new-jwt"
 
 # Hard fallback locale used when neither an explicit locale, the
 # WIKIJS_DEFAULT_LOCALE environment variable nor the site's primary locale
@@ -125,12 +131,70 @@ class WikiJSClient:
         # Cache of asset folder id -> slash-joined lowercase slug path, filled
         # while walking/creating folder hierarchies (see asset_folder_id).
         self._folder_path_cache: dict[int, str] = {}
+        # Session-auth state. `_session_token` holds the current bearer token
+        # in "session" mode (resolved lazily from env var > token file, then
+        # kept in sync with `new-jwt` renewals).
+        self._auth_mode = config.auth_mode
+        self._session_token: str | None = None
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.client.aclose()
+
+    # ------------------------------------------------------------------
+    # Authentication / session-token handling
+    # ------------------------------------------------------------------
+
+    def _resolve_token(self) -> str:
+        """Return the current bearer token for the configured auth mode.
+
+        - ``apikey``: the admin personal access token (unchanged behaviour).
+        - ``session``: the JWT session token, resolved lazily with precedence
+          env var (``WIKIJS_SESSION_TOKEN``) > token file, then kept in sync
+          with ``new-jwt`` renewals.
+        """
+        if self._auth_mode != "session":
+            return self.config.api_key
+        if not self._session_token:
+            self._session_token = session_store.resolve_session_token(
+                self.config.session_token
+            )
+        return self._session_token
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Build the request headers for the GraphQL/multipart endpoints."""
+        return {
+            "Authorization": f"Bearer {self._resolve_token()}",
+            "Content-Type": "application/json",
+        }
+
+    def _maybe_renew_token(self, response: httpx.Response) -> None:
+        """Reactively adopt a refreshed JWT from the ``new-jwt`` header.
+
+        Wiki.js hands back a fresh token for the current session on selected
+        responses. The new value is used for the remainder of the client's
+        lifetime and persisted to the session-token file (``chmod 600``) so a
+        later process starts with the fresh token. Persistence failures only
+        log a warning — the in-memory token still applies.
+        """
+        if self._auth_mode != "session":
+            return
+        new_token = response.headers.get(NEW_JWT_HEADER)
+        if not new_token or not isinstance(new_token, str) or not new_token.strip():
+            return
+        new_token = new_token.strip()
+        self._session_token = new_token
+        try:
+            session_store.write_session_token(new_token)
+        except OSError as exc:  # pragma: no cover - filesystem edge case
+            logger.warning(
+                "Received a renewed session token but could not persist it to "
+                "%s: %s",
+                session_store.token_path(),
+                exc,
+            )
 
     def _env_locale(self) -> str | None:
         """Return the locale from WIKIJS_DEFAULT_LOCALE, if set."""
@@ -206,9 +270,10 @@ class WikiJSClient:
 
         try:
             response = await self.client.post(
-                self.config.graphql_url, json=payload, headers=self.config.headers
+                self.config.graphql_url, json=payload, headers=self._auth_headers()
             )
             response.raise_for_status()
+            self._maybe_renew_token(response)
             result = response.json()
 
             if "errors" in result:
@@ -929,7 +994,7 @@ class WikiJSClient:
                 raise Exception(
                     f"Asset folder segment '{slug}' could neither be found nor "
                     f"created under parent folder {parent_id}. Ensure the API "
-                    f"key has the write:assets permission."
+                    f"key or the session user has the write:assets permission."
                 )
 
             parent_id = int(folder["id"])
@@ -988,7 +1053,7 @@ class WikiJSClient:
         data = {"mediaUpload": json.dumps({"folderId": folder_id})}
         # Multipart requests set their own Content-Type with a boundary, so
         # only the bearer token is forwarded here.
-        headers = {"Authorization": self.config.headers["Authorization"]}
+        headers = {"Authorization": self._auth_headers()["Authorization"]}
 
         try:
             response = await self.client.post(
@@ -999,8 +1064,8 @@ class WikiJSClient:
 
         if response.status_code != 200 or response.text.strip() != "ok":
             hint = (
-                "Ensure the API key has the write:assets permission and that "
-                "the target folder exists."
+                "Ensure the API key or the session user has the write:assets "
+                "permission and that the target folder exists."
             )
             raise Exception(
                 f"Upload failed (HTTP {response.status_code}): "

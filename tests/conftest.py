@@ -155,6 +155,9 @@ def clean_env():
         "WIKIJS_API_KEY",
         "WIKIJS_GRAPHQL_ENDPOINT",
         "WIKIJS_DEFAULT_LOCALE",
+        "WIKIJS_AUTH_MODE",
+        "WIKIJS_SESSION_TOKEN",
+        "WIKIJS_SESSION_TOKEN_FILE",
         "DEBUG",
     ]
 

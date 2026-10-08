@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import sys
 
 from mcp.server import FastMCP
 
@@ -820,18 +821,19 @@ class WikiJSMCPServer:
 
 async def _async_main():
     """Async entry point."""
-    import sys
-
     logging.basicConfig(level=logging.INFO)
 
     if len(sys.argv) > 1 and sys.argv[1] == "--help":
         print("WikiJS MCP Server")
         print("Usage:")
         print("  wikijs-mcp")
+        print("  wikijs-mcp login")
+        print("  wikijs-mcp session-status")
         print("  wikijs-mcp --help")
         print("")
         print("Runs the MCP server over stdio for use with Claude Code")
-        print("and other MCP clients.")
+        print("and other MCP clients. 'login' performs a one-time browser")
+        print("login via SSO/Authentik; 'session-status' shows the token state.")
         return
 
     server = WikiJSMCPServer()
@@ -840,6 +842,15 @@ async def _async_main():
 
 def main():
     """Entry point for the wikijs-mcp command."""
+    argv = sys.argv[1:]
+    if argv and argv[0] == "login":
+        from . import login
+
+        raise SystemExit(login.run_login(argv[1:]))
+    if argv and argv[0] == "session-status":
+        from . import login
+
+        raise SystemExit(login.run_session_status(argv[1:]))
     asyncio.run(_async_main())
 
 
