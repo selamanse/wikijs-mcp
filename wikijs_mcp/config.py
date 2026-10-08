@@ -1,12 +1,30 @@
 """Configuration management for WikiJS MCP Server."""
 
 import os
+import re
 
 from pydantic import BaseModel, Field, field_validator
 
 from . import session as session_store
 
 VALID_AUTH_MODES = ("apikey", "session")
+
+
+def normalize_url(url: str) -> str:
+    """Trim whitespace and prepend ``https://`` when the URL has no scheme.
+
+    Users routinely pass a bare hostname such as ``wiki.example.com``. Without
+    a scheme, ``webbrowser.open`` and the HTTP client treat the value as a
+    local path instead of an URL — the default browser then shows a blank
+    page. Explicit ``http://``/``https://`` (or ``localhost:8080``) values are
+    kept unchanged.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", url):
+        return url
+    return f"https://{url}"
 
 
 class WikiJSConfig(BaseModel):
@@ -27,6 +45,11 @@ class WikiJSConfig(BaseModel):
     #               wikijs_mcp.session), env var taking precedence.
     auth_mode: str = Field(default="apikey")
     session_token: str | None = Field(default=None)
+
+    @field_validator("url")
+    @classmethod
+    def _normalize_url(cls, value: str) -> str:
+        return normalize_url(value)
 
     @field_validator("auth_mode")
     @classmethod

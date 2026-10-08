@@ -110,6 +110,21 @@ class TestSessionAuthModeResolution:
         with pytest.raises(ValueError, match="WIKIJS_API_KEY"):
             config.validate_config()
 
+    # --- URL schema normalization ---
+
+    def test_url_without_scheme_normalized(self):
+        assert WikiJSConfig(url="wiki.example.com").url == "https://wiki.example.com"
+
+    def test_url_explicit_http_kept(self):
+        assert WikiJSConfig(url="http://wiki.example.com").url == "http://wiki.example.com"
+
+    def test_url_empty_stays_empty(self):
+        assert WikiJSConfig().url == ""
+
+    def test_load_config_normalizes_url(self, monkeypatch):
+        monkeypatch.setenv("WIKIJS_URL", "wiki.example.com")
+        assert WikiJSConfig.load_config().url == "https://wiki.example.com"
+
 
 # ----------------------------------------------------------------------
 # Token store
@@ -330,6 +345,7 @@ class TestSessionAuthLoginCommand:
         monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
         monkeypatch.setattr(login.webbrowser, "open", lambda url: True)
+        monkeypatch.setattr(login, "_probe_login_url", lambda url: None)
         monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "jwt.abc.def")
 
         rc = login.run_login([])
@@ -369,12 +385,46 @@ class TestSessionAuthLoginCommand:
         monkeypatch.setenv("WIKIJS_URL", "https://wiki.example.com")
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
         monkeypatch.setattr(login.webbrowser, "open", lambda url: True)
+        monkeypatch.setattr(login, "_probe_login_url", lambda url: None)
         monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "   ")
 
         rc = login.run_login([])
 
         assert rc == 2
         assert not (tmp_path / "session-token").exists()
+
+    def test_run_login_normalizes_bare_hostname(self, tmp_path, monkeypatch, capsys):
+        from wikijs_mcp import login
+
+        opened = []
+
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(login.webbrowser, "open", lambda url: opened.append(url) or True)
+        monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "jwt.abc.def")
+        # httpx probe is best-effort; make it inert here.
+        monkeypatch.setattr(login, "_probe_login_url", lambda url: None)
+
+        rc = login.run_login(["--url", "wiki.example.com"])
+
+        assert rc == 0
+        assert opened, "browser should be opened"
+        assert opened[0] == "https://wiki.example.com/login"
+        out = capsys.readouterr().out
+        assert "https://wiki.example.com/login" in out
+
+    def test_run_login_no_open_skips_browser(self, tmp_path, monkeypatch):
+        from wikijs_mcp import login
+
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(login.webbrowser, "open", lambda url: True)
+        monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "jwt.abc.def")
+
+        rc = login.run_login(["--url", "https://wiki.example.com", "--no-open"])
+
+        assert rc == 0
+        assert (tmp_path / "session-token").read_text() == "jwt.abc.def"
 
 
 # ----------------------------------------------------------------------

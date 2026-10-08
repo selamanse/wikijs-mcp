@@ -116,13 +116,19 @@ wikijs-mcp login --url https://your-wiki.com   # or rely on WIKIJS_URL
 ```
 
 The command opens `{url}/login` in **your standard browser** (no Playwright
-browser involved). Log in through SSO/Authentik there, then copy the session
-cookie:
+browser involved). A missing scheme is completed automatically: passing
+`--url wiki.example.com` opens `https://wiki.example.com/login`. Log in
+through SSO/Authentik there, then copy the session cookie:
 
 1. Open the browser devtools (`F12`).
 2. *Application* → *Cookies* → your wiki host.
 3. Copy the value of the cookie named `jwt`.
 4. Paste it into the terminal prompt (input is hidden).
+
+> **Blank page?** The login URL printed by the command is the one to use. If
+> your browser shows a blank page anyway, run with `--no-open` and open that
+> URL manually — this also surfaces the reachability probe (HTTP status /
+> redirect target) the command prints to the terminal.
 
 The token is stored at:
 

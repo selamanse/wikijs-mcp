@@ -32,7 +32,7 @@ import webbrowser
 from datetime import datetime
 
 from . import session as session_store
-from .config import WikiJSConfig
+from .config import WikiJSConfig, normalize_url
 
 
 def _build_login_parser() -> argparse.ArgumentParser:
@@ -43,7 +43,8 @@ def _build_login_parser() -> argparse.ArgumentParser:
             "the session JWT. After logging in (SSO/Authentik), copy the 'jwt' "
             "cookie value from the browser devtools and paste it. The token is "
             "stored with chmod 600 and refreshed automatically via the "
-            "'new-jwt' response header."
+            "'new-jwt' response header. A missing scheme (e.g. "
+            "'wiki.example.com') is completed to https:// automatically."
         ),
     )
     parser.add_argument(
@@ -51,19 +52,57 @@ def _build_login_parser() -> argparse.ArgumentParser:
         default="",
         help="Wiki.js base URL (default: WIKIJS_URL environment variable).",
     )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Do not open the browser; only print the login URL and wait for "
+        "the pasted cookie (useful when the auto-open shows a blank page).",
+    )
     return parser
+
+
+def _probe_login_url(login_url: str) -> None:
+    """Best-effort reachability check for the login URL (warns, never blocks)."""
+    try:
+        import httpx
+
+        response = httpx.get(
+            login_url,
+            follow_redirects=True,
+            timeout=8.0,
+            headers={"User-Agent": "wikijs-mcp login"},
+        )
+        content_type = response.headers.get("content-type", "?")
+        print(
+            f"probe: HTTP {response.status_code} ({content_type}) after redirects",
+            file=sys.stderr,
+        )
+        if response.status_code >= 400:
+            print(
+                "  hint: the URL may be wrong, or the wiki sits behind a "
+                "reverse proxy with a base path (e.g. https://host/wiki/login).",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # noqa: BLE001 - non-fatal diagnostic
+        print(f"probe: could not reach {login_url}: {exc}", file=sys.stderr)
+        print(
+            "  hint: check the hostname / network, or open the URL manually.",
+            file=sys.stderr,
+        )
 
 
 def _open_login_page(url: str) -> None:
     """Open the Wiki.js login page in the OS default browser."""
     login_url = f"{url.rstrip('/')}/login"
     print(f"Opening {login_url} in your standard browser ...")
-    if not webbrowser.open(login_url):
+    opened = webbrowser.open(login_url)
+    if not opened:
         print(
             f"Could not open a browser automatically. Please open this URL "
             f"manually:\n  {login_url}",
             file=sys.stderr,
         )
+    _probe_login_url(login_url)
 
 
 def _read_pasted_token() -> str:
@@ -86,7 +125,7 @@ def run_login(argv: list[str] | None = None) -> int:
     """Run the ``wikijs-mcp login`` command. Returns an exit code."""
     args = _build_login_parser().parse_args(argv)
 
-    url = (args.url or WikiJSConfig.load_config().url).strip().rstrip("/")
+    url = normalize_url((args.url or WikiJSConfig.load_config().url).strip()).rstrip("/")
     if not url:
         print(
             "No Wiki.js URL configured: pass --url or set WIKIJS_URL.",
@@ -94,7 +133,7 @@ def run_login(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    if sys.stdin.isatty():
+    if sys.stdin.isatty() and not args.no_open:
         _open_login_page(url)
 
     token = _read_pasted_token()
