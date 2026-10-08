@@ -199,7 +199,7 @@ class TestWikiJSMCPServer:
         server = WikiJSMCPServer()
 
         tools = await server.app.list_tools()
-        assert len(tools) == 17  # 12 original wiki tools + 5 asset tools
+        assert len(tools) == 21  # 12 original page tools + 5 asset tools + 4 comment tools
 
         tool_names = [tool.name for tool in tools]
         expected_names = [
@@ -220,6 +220,10 @@ class TestWikiJSMCPServer:
             "wiki_create_asset_folder",
             "wiki_rename_asset",
             "wiki_delete_asset",
+            "wiki_list_comments",
+            "wiki_create_comment",
+            "wiki_update_comment",
+            "wiki_delete_comment",
         ]
         assert set(tool_names) == set(expected_names)
 

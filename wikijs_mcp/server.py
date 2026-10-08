@@ -129,6 +129,10 @@ class WikiJSMCPServer:
                 "- Use the asset tools (wiki_upload_asset, wiki_list_assets, wiki_create_asset_folder,\n"
                 "  wiki_rename_asset, wiki_delete_asset) to manage files. Uploads require the\n"
                 "  write:assets permission; folders are created on demand and wiki slugs are lowercased.\n"
+                "- Use the comment tools (wiki_list_comments, wiki_create_comment, wiki_update_comment,\n"
+                "  wiki_delete_comment) to manage page comments. Pages are identified by path for\n"
+                "  reading and by numeric ID for mutations. Comments are attributed to the\n"
+                "  authenticated user and render as markdown.\n"
             ),
         )
         self.credential_resolver = WikiJSCredentialResolver(self.config)
@@ -944,6 +948,143 @@ class WikiJSMCPServer:
                     response += f"**Tags:** {', '.join(version['tags'])}\n"
                 response += "\n---\n\n"
                 response += version.get("content", "")
+
+                return response
+
+        @self.app.tool(
+            description="List the comments of a wiki page by its path or numeric page ID. Returns comment IDs, content, author and creation date. Requires the read:comments permission on the page. Use path for human-readable lookups, page_id for follow-ups from list/search results."
+        )
+        async def wiki_list_comments(
+            path: str | None = None,
+            page_id: int | None = None,
+            locale: str | None = None,
+        ) -> str:
+            """List the comments of a wiki page.
+
+            Args:
+                path: Page path (e.g. 'docs/getting-started'). Use either
+                    path OR page_id, not both.
+                page_id: Numeric page ID. Use either path OR page_id, not both.
+                locale: Page locale (only used with path). Uses the wiki's
+                    resolved default locale when omitted (WIKIJS_DEFAULT_LOCALE,
+                    then the site's primary locale, then 'de').
+            """
+            if (path is None) == (page_id is None):
+                raise ValueError(
+                    "Provide exactly one of 'path' or 'page_id' — not both, "
+                    "and at least one."
+                )
+
+            async with WikiJSClient(self.config) as client:
+                if page_id is not None:
+                    page = await client.get_page_by_id(page_id, metadata_only=True)
+                    if not page:
+                        return f"Page with ID {page_id} not found"
+                    path = page.get("path")
+
+                try:
+                    comments = await client.list_comments(path, locale)
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc} (Hint: listing comments requires the read:comments "
+                        f"permission on the page.)"
+                    ) from exc
+
+                if not comments:
+                    return f"No comments found for page: {path}"
+
+                response = (
+                    f"Found {len(comments)} comment(s) for page '{path}':\n\n"
+                )
+                for comment in comments:
+                    response += f"**Comment ID:** {comment.get('id', '?')}\n"
+                    response += f"**Author:** {comment.get('authorName', 'Unknown')}\n"
+                    if comment.get("createdAt"):
+                        response += f"**Created:** {comment['createdAt']}\n"
+                    response += f"Content:\n{comment.get('content', '')}\n\n"
+
+                return response
+
+        @self.app.tool(
+            description="Create a comment on a wiki page by its numeric page ID. The content is written as markdown and attributed to the authenticated user, so in session mode the comment appears under your own wiki user. Content must not be empty. Requires the write:comments permission on the page."
+        )
+        async def wiki_create_comment(page_id: int, content: str) -> str:
+            """Create a comment on a page by its numeric ID.
+
+            Args:
+                page_id: Numeric page ID to comment on
+                content: Comment content in markdown (must not be empty)
+            """
+            if not content or not content.strip():
+                raise ValueError("Comment content must not be empty.")
+
+            async with WikiJSClient(self.config) as client:
+                try:
+                    result = await client.create_comment(page_id, content)
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc} (Hint: creating a comment requires the write:comments "
+                        f"permission on the page.)"
+                    ) from exc
+
+                response = f"✅ Successfully created comment on page with ID: {page_id}\n"
+                response_result = result.get("responseResult", {})
+                if response_result.get("errorCode"):
+                    response += f"**Error code:** {response_result['errorCode']}\n"
+
+                return response
+
+        @self.app.tool(
+            description="Update an existing comment by its numeric comment ID. The full content must be provided; empty content is rejected. Requires the manage:comments permission."
+        )
+        async def wiki_update_comment(comment_id: int, content: str) -> str:
+            """Update a comment by its numeric ID.
+
+            Args:
+                comment_id: Numeric comment ID to update
+                content: New comment content in markdown (must not be empty)
+            """
+            if not content or not content.strip():
+                raise ValueError("Comment content must not be empty.")
+
+            async with WikiJSClient(self.config) as client:
+                try:
+                    result = await client.update_comment(comment_id, content)
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc} (Hint: updating a comment requires the manage:comments "
+                        f"permission on the page.)"
+                    ) from exc
+
+                response = f"✅ Successfully updated comment with ID: {comment_id}\n"
+                response_result = result.get("responseResult", {})
+                if response_result.get("errorCode"):
+                    response += f"**Error code:** {response_result['errorCode']}\n"
+
+                return response
+
+        @self.app.tool(
+            description="Permanently delete a comment by its numeric comment ID. This action cannot be undone. Requires the manage:comments permission."
+        )
+        async def wiki_delete_comment(comment_id: int) -> str:
+            """Delete a comment by its numeric ID.
+
+            Args:
+                comment_id: Numeric comment ID to delete
+            """
+            async with WikiJSClient(self.config) as client:
+                try:
+                    result = await client.delete_comment(comment_id)
+                except Exception as exc:
+                    raise Exception(
+                        f"{exc} (Hint: deleting a comment requires the manage:comments "
+                        f"permission on the page.)"
+                    ) from exc
+
+                response = f"✅ Successfully deleted comment with ID: {comment_id}\n"
+                response_result = result.get("responseResult", {})
+                if response_result.get("errorCode"):
+                    response += f"**Error code:** {response_result['errorCode']}\n"
 
                 return response
 

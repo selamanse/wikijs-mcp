@@ -1226,3 +1226,150 @@ class WikiJSClient:
         variables = {"pageId": page_id, "versionId": version_id}
         result = await self._execute_query(graphql_query, variables)
         return result.get("pages", {}).get("version")
+
+    # ------------------------------------------------------------------
+    # Comments
+    # ------------------------------------------------------------------
+
+    async def list_comments(
+        self, page_path: str, locale: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List the comments of a page by its path.
+
+        Requires the ``read:comments`` permission (a page-rule permission,
+        ``mayOnPage``) on the page. ``authorEmail`` must not be requested —
+        it returns ``Forbidden`` on the live instance.
+
+        When ``locale`` is omitted the resolved default locale is used (see
+        ``_resolve_locale``).
+        """
+        graphql_query = """
+        query ListComments($locale: String!, $path: String!) {
+            comments {
+                list(locale: $locale, path: $path) {
+                    id
+                    content
+                    authorName
+                    createdAt
+                }
+            }
+        }
+        """
+
+        resolved_locale = await self._resolve_locale(locale)
+        result = await self._execute_query(
+            graphql_query, {"locale": resolved_locale, "path": page_path}
+        )
+        return result.get("comments", {}).get("list", [])
+
+    async def create_comment(self, page_id: int, content: str) -> dict[str, Any]:
+        """Create a comment on a page by its numeric ID.
+
+        Requires the ``write:comments`` permission on the page. The comment
+        is attributed to the authenticated user (in session mode a regular
+        wiki user).
+        """
+        graphql_query = """
+        mutation CreateComment($pageId: Int!, $content: String!) {
+            comments {
+                create(pageId: $pageId, content: $content) {
+                    responseResult {
+                        succeeded
+                        errorCode
+                        message
+                    }
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query(
+            graphql_query, {"pageId": page_id, "content": content}
+        )
+        create_result = result.get("comments", {}).get("create", {})
+
+        response = create_result.get("responseResult", {})
+        if not response.get("succeeded"):
+            raise Exception(
+                f"Failed to create comment: {response.get('message', 'Unknown error')}"
+                + (
+                    f" (errorCode {response['errorCode']})"
+                    if response.get("errorCode")
+                    else ""
+                )
+            )
+
+        return create_result
+
+    async def update_comment(self, comment_id: int, content: str) -> dict[str, Any]:
+        """Update an existing comment's content by its numeric ID.
+
+        Requires the ``manage:comments`` permission on the comment's page.
+        """
+        graphql_query = """
+        mutation UpdateComment($id: Int!, $content: String!) {
+            comments {
+                update(id: $id, content: $content) {
+                    responseResult {
+                        succeeded
+                        errorCode
+                        message
+                    }
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query(
+            graphql_query, {"id": comment_id, "content": content}
+        )
+        update_result = result.get("comments", {}).get("update", {})
+
+        response = update_result.get("responseResult", {})
+        if not response.get("succeeded"):
+            raise Exception(
+                f"Failed to update comment: {response.get('message', 'Unknown error')}"
+                + (
+                    f" (errorCode {response['errorCode']})"
+                    if response.get("errorCode")
+                    else ""
+                )
+            )
+
+        return update_result
+
+    async def delete_comment(self, comment_id: int) -> dict[str, Any]:
+        """Delete a comment by its numeric ID (irreversible).
+
+        Requires the ``manage:comments`` permission on the comment's page.
+        The Wiki.js mutation is named ``delete`` (not ``remove``).
+        """
+        graphql_query = """
+        mutation DeleteComment($id: Int!) {
+            comments {
+                delete(id: $id) {
+                    responseResult {
+                        succeeded
+                        errorCode
+                        message
+                    }
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query(graphql_query, {"id": comment_id})
+        delete_result = result.get("comments", {}).get("delete", {})
+
+        response = delete_result.get("responseResult", {})
+        if not response.get("succeeded"):
+            raise Exception(
+                f"Failed to delete comment: {response.get('message', 'Unknown error')}"
+                + (
+                    f" (errorCode {response['errorCode']})"
+                    if response.get("errorCode")
+                    else ""
+                )
+            )
+
+        return delete_result
