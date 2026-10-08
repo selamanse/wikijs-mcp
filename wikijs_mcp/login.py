@@ -58,6 +58,12 @@ def _build_login_parser() -> argparse.ArgumentParser:
         help="Do not open the browser; only print the login URL and wait for "
         "the pasted cookie (useful when the auto-open shows a blank page).",
     )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read the token from standard input until EOF instead of prompting "
+        "interactively (scripting / CI).",
+    )
     return parser
 
 
@@ -105,20 +111,38 @@ def _open_login_page(url: str) -> None:
     _probe_login_url(login_url)
 
 
-def _read_pasted_token() -> str:
-    """Read the ``jwt`` cookie value from the user (hidden prompt or stdin)."""
+def _read_pasted_token(use_stdin: bool = False) -> str:
+    """Read the ``jwt`` cookie value from the user or from stdin.
+
+    Interactive (TTY) input uses a hidden prompt and re-asks up to three times
+    when the user hits Enter with an empty paste. With ``--stdin`` the whole
+    input is read until EOF; a plain pipe (non-TTY without the flag) reads a
+    single line so that an idle wrapper terminal cannot hang the command.
+    """
     if not sys.stdin.isatty():
-        # Piped usage: read the token from stdin.
-        return sys.stdin.read().strip()
-    print(
+        if use_stdin:
+            return sys.stdin.read().strip()
+        return (sys.stdin.readline() or "").strip()
+
+    instructions = (
         "Log in to the wiki (SSO/Authentik) in the browser, then copy the 'jwt'\n"
         "cookie value: devtools (F12) -> Application -> Cookies -> 'jwt'.\n"
-        "Paste it below and press Enter (input is hidden)."
+        "Paste it below and press Enter. The input is hidden (nothing appears\n"
+        "while you paste — that is expected)."
     )
-    try:
-        return getpass.getpass("jwt cookie: ").strip()
-    except (EOFError, OSError):  # pragma: no cover - non-interactive edge case
-        return ""
+    for _ in range(3):
+        print(instructions)
+        try:
+            token = getpass.getpass("jwt cookie: ").strip()
+        except (EOFError, OSError):  # pragma: no cover - non-interactive edge
+            token = ""
+        if token:
+            return token
+        print(
+            "No token received — paste the jwt cookie value and press Enter.",
+            file=sys.stderr,
+        )
+    return ""
 
 
 def run_login(argv: list[str] | None = None) -> int:
@@ -136,9 +160,14 @@ def run_login(argv: list[str] | None = None) -> int:
     if sys.stdin.isatty() and not args.no_open:
         _open_login_page(url)
 
-    token = _read_pasted_token()
+    token = _read_pasted_token(use_stdin=args.stdin)
     if not token:
-        print("No token was provided; nothing stored.", file=sys.stderr)
+        print(
+            "No token was provided; nothing stored. Hint: copy the 'jwt' cookie "
+            "from the browser devtools (F12 -> Application -> Cookies) and paste "
+            "it at the prompt before pressing Enter.",
+            file=sys.stderr,
+        )
         return 2
 
     try:

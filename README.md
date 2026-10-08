@@ -139,7 +139,9 @@ The token is stored at:
 For scripts/CI, pipe the token instead of pasting it:
 
 ```bash
-echo '<jwt>' | wikijs-mcp login --url https://your-wiki.com
+echo '<jwt>' | wikijs-mcp login --url https://your-wiki.com   # one line
+# or, to read the whole stdin until EOF:
+echo '<jwt>' | wikijs-mcp login --url https://your-wiki.com --stdin
 ```
 
 Inspect the current state (never prints the token itself):

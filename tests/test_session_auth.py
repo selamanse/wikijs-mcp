@@ -362,13 +362,14 @@ class TestSessionAuthLoginCommand:
 
         monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
         monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        # Plain pipe (no --stdin): a single line is consumed.
         monkeypatch.setattr(
             "sys.stdin",
             type(
                 "FakeStdin",
                 (),
                 {
-                    "read": staticmethod(lambda: "pipe.jwt.xyz\n"),
+                    "readline": staticmethod(lambda: "pipe.jwt.xyz\n"),
                     "isatty": staticmethod(lambda: False),
                 },
             )(),
@@ -378,6 +379,47 @@ class TestSessionAuthLoginCommand:
 
         assert rc == 0
         assert (tmp_path / "session-token").read_text() == "pipe.jwt.xyz"
+
+    def test_run_login_stdin_flag_reads_until_eof(self, tmp_path, monkeypatch):
+        from wikijs_mcp import login
+
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr(
+            "sys.stdin",
+            type(
+                "FakeStdin",
+                (),
+                {
+                    "read": staticmethod(lambda: "eof.jwt.abc\n"),
+                    "isatty": staticmethod(lambda: False),
+                },
+            )(),
+        )
+
+        rc = login.run_login(["--url", "https://wiki.example.com", "--stdin"])
+
+        assert rc == 0
+        assert (tmp_path / "session-token").read_text() == "eof.jwt.abc"
+
+    def test_run_login_reprompts_then_succeeds(self, tmp_path, monkeypatch, capsys):
+        """Empty Enter re-asks instead of failing silently."""
+        from wikijs_mcp import login
+
+        answers = iter(["", "jwt.after.retry"])
+
+        monkeypatch.setenv("WIKIJS_URL", "https://wiki.example.com")
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(login.webbrowser, "open", lambda url: True)
+        monkeypatch.setattr(login, "_probe_login_url", lambda url: None)
+        monkeypatch.setattr(login.getpass, "getpass", lambda prompt: next(answers))
+
+        rc = login.run_login([])
+
+        assert rc == 0
+        assert (tmp_path / "session-token").read_text() == "jwt.after.retry"
+        assert "No token received" in capsys.readouterr().err
 
     def test_run_login_empty_token_errors(self, tmp_path, monkeypatch):
         from wikijs_mcp import login
