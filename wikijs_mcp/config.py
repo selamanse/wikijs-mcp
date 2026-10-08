@@ -3,7 +3,11 @@
 import json
 import os
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from . import session as session_store
+
+VALID_AUTH_MODES = ("apikey", "session")
 
 DEFAULT_MCP_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*"]
 DEFAULT_MCP_ALLOWED_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*"]
@@ -84,6 +88,24 @@ class WikiJSConfig(BaseModel):
     cloudflare_access_jwks_url: str = Field(default="")
     auth_users: dict[str, str] = Field(default_factory=dict)
     auth_profiles: dict[str, str] = Field(default_factory=dict)
+    # Authentication mode:
+    #   "apikey"  - admin personal access token (WIKIJS_API_KEY), the default.
+    #   "session" - regular user via SSO/Authentik login; the browser `jwt`
+    #               cookie is sent as Authorization: Bearer. The token comes
+    #               from WIKIJS_SESSION_TOKEN (env) or the token file (see
+    #               wikijs_mcp.session), env var taking precedence.
+    auth_mode: str = Field(default="apikey")
+    session_token: str | None = Field(default=None)
+
+    @field_validator("auth_mode")
+    @classmethod
+    def _normalize_auth_mode(cls, value: str) -> str:
+        mode = (value or "apikey").strip().lower()
+        if mode not in VALID_AUTH_MODES:
+            raise ValueError(
+                f"Invalid auth mode {value!r}. Must be one of: {', '.join(VALID_AUTH_MODES)}"
+            )
+        return mode
 
     @classmethod
     def load_config(cls) -> "WikiJSConfig":
@@ -111,6 +133,8 @@ class WikiJSConfig(BaseModel):
                 os.getenv("WIKIJS_AUTH_USERS"), normalize_keys=True
             ),
             auth_profiles=parse_mapping(os.getenv("WIKIJS_AUTH_PROFILES")),
+            auth_mode=os.getenv("WIKIJS_AUTH_MODE", "apikey"),
+            session_token=os.getenv("WIKIJS_SESSION_TOKEN") or None,
         )
 
     @property
@@ -120,7 +144,13 @@ class WikiJSConfig(BaseModel):
 
     @property
     def headers(self) -> dict[str, str]:
-        """Get authentication headers for API requests."""
+        """Get authentication headers for API requests.
+
+        ``apikey`` mode: the admin PAT. For ``session`` mode the client
+        resolves the token dynamically (env var > token file) and reacts to
+        ``new-jwt`` renewals, so this static property is only used in apikey
+        mode; clients should prefer ``WikiJSClient._auth_headers()``.
+        """
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -141,6 +171,10 @@ class WikiJSConfig(BaseModel):
         """Validate that required configuration is present."""
         if not self.url:
             raise ValueError("WIKIJS_URL environment variable must be set.")
+        if self.auth_mode == "session":
+            # Precedence: WIKIJS_SESSION_TOKEN env var > token file.
+            session_store.resolve_session_token(self.session_token)
+            return
         if require_api_key and not self.api_key:
             raise ValueError("WIKIJS_API_KEY environment variable must be set.")
 

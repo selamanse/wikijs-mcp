@@ -168,6 +168,9 @@ def clean_env():
         "WIKIJS_AUTH_PROFILES",
         "WIKIJS_API_KEY_ADMIN",
         "WIKIJS_API_KEY_FRIENDS",
+        "WIKIJS_AUTH_MODE",
+        "WIKIJS_SESSION_TOKEN",
+        "WIKIJS_SESSION_TOKEN_FILE",
         "DEBUG",
     ]
 

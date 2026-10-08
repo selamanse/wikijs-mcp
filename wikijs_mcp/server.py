@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
@@ -1009,6 +1010,19 @@ async def _async_main():
     """Async entry point."""
     logging.basicConfig(level=logging.INFO)
 
+    if len(sys.argv) > 1 and sys.argv[1] == "--help":
+        print("WikiJS MCP Server")
+        print("Usage:")
+        print("  wikijs-mcp")
+        print("  wikijs-mcp login")
+        print("  wikijs-mcp session-status")
+        print("  wikijs-mcp --help")
+        print("")
+        print("Runs the MCP server over stdio for use with Claude Code")
+        print("and other MCP clients. 'login' performs a one-time browser")
+        print("login via SSO/Authentik; 'session-status' shows the token state.")
+        return
+
     args = build_arg_parser().parse_args()
 
     server = WikiJSMCPServer()
@@ -1017,6 +1031,15 @@ async def _async_main():
 
 def main():
     """Entry point for the wikijs-mcp command."""
+    argv = sys.argv[1:]
+    if argv and argv[0] == "login":
+        from . import login
+
+        raise SystemExit(login.run_login(argv[1:]))
+    if argv and argv[0] == "session-status":
+        from . import login
+
+        raise SystemExit(login.run_session_status(argv[1:]))
     asyncio.run(_async_main())
 
 
