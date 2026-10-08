@@ -149,3 +149,7 @@ Thumbs.db
 
 # Bandit security reports
 bandit-report.json
+# Live smoke / scratch artifacts (never push these — they may contain
+# environment-specific scope paths and credentials)
+smoke_test_live_session.py
+smoke_*.py
