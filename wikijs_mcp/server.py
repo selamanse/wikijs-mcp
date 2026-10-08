@@ -832,9 +832,9 @@ async def _async_main():
         print("  wikijs-mcp --help")
         print("")
         print("Runs the MCP server over stdio for use with Claude Code")
-        print("and other MCP clients. 'login' opens the login page in your")
-        print("standard browser and stores the session JWT; 'session-status'")
-        print("shows the token state.")
+        print("and other MCP clients. 'login' drives your browser through the")
+        print("SSO login and stores the captured session JWT (or paste the")
+        print("cookie with --manual); 'session-status' shows the token state.")
         return
 
     server = WikiJSMCPServer()

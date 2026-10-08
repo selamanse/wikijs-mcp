@@ -111,14 +111,40 @@ and persists automatically.
 
 ### 1. One-time browser login
 
+First make sure the browser-automation extra is installed:
+
+```bash
+# with uv (as a tool):
+uv tool install --reinstall --extra login .
+# or with pip:
+pip install "wikijs-mcp[login]"
+```
+
+Then log in:
+
 ```bash
 wikijs-mcp login --url https://your-wiki.com   # or rely on WIKIJS_URL
 ```
 
-The command opens `{url}/login` in **your standard browser** (no Playwright
-browser involved). A missing scheme is completed automatically: passing
-`--url wiki.example.com` opens `https://wiki.example.com/login`. Log in
-through SSO/Authentik there, then copy the session cookie:
+The command opens `{url}/login` in a normal **Google Chrome** window
+(`channel="chrome"`, with a persistent profile under
+`~/.config/wikijs-mcp/chrome-profile`) and drives the flow for you:
+
+1. The wiki redirects to your SSO provider (Authentik).
+2. Log in once in the browser window (later logins reuse the persistent
+   profile's SSO session and are near-instant).
+3. As soon as the wiki sets the `jwt` cookie, it is captured **automatically**
+   and stored — no copy & paste, no devtools.
+
+A missing scheme is completed automatically: `--url wiki.example.com` uses
+`https://wiki.example.com/login`. `--browser chromium` switches to the
+Playwright-bundled browser (`python -m playwright install chromium` first);
+`--headless` runs the capture without a visible window; `--timeout` bounds the
+wait for the `jwt` cookie (default 300 s).
+
+**No Chrome / no automation?** Fall back to the manual flow
+(`--manual`): the command opens `{url}/login` in your standard browser, log in
+through SSO/Authentik, then paste the cookie value:
 
 1. Open the browser devtools (`F12`).
 2. *Application* → *Cookies* → your wiki host.
@@ -129,6 +155,11 @@ through SSO/Authentik there, then copy the session cookie:
 > your browser shows a blank page anyway, run with `--no-open` and open that
 > URL manually — this also surfaces the reachability probe (HTTP status /
 > redirect target) the command prints to the terminal.
+
+Why automation? The wiki is an OIDC *client* of Authentik: it signs its own
+session JWT server-side, so there is no token endpoint to poll like
+`gh`/`gcloud` have. The `jwt` cookie is `httpOnly`, so only a real browser
+session (driven by Playwright) can read it automatically.
 
 The token is stored at:
 

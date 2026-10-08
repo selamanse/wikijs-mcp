@@ -24,6 +24,12 @@ mcp = "^1.0.0"
 httpx = ">=0.25.0"
 pydantic = "^2.0.0"
 truststore = ">=0.9.0"
+# Optional: required only for the automated browser login (`wikijs-mcp login`).
+# Without it, `login --manual` / `login --stdin` still work.
+playwright = { version = ">=1.40.0", optional = true }
+
+[tool.poetry.extras]
+login = ["playwright"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"

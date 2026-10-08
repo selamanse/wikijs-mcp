@@ -322,13 +322,60 @@ class TestSessionAuthRenewal:
 
 
 # ----------------------------------------------------------------------
-# Login command (standard browser + manual cookie paste)
+# Login command (automated Chrome capture + manual paste fallback)
 # ----------------------------------------------------------------------
 
 
 @pytest.mark.unit
 class TestSessionAuthLoginCommand:
-    """``wikijs-mcp login`` opens the standard browser and stores the pasted JWT."""
+    """``wikijs-mcp login`` captures the JWT (auto via Chrome, or manual paste)."""
+
+    def _install_fake_playwright(self, monkeypatch, cookies):
+        """Inject a fake ``playwright.sync_api`` so no real install is needed."""
+        import sys
+        import types
+
+        class FakePage:
+            def goto(self, url, **kwargs):
+                self.url = url
+
+        class FakeContext:
+            def __init__(self, cookies):
+                self.pages = [FakePage()]
+                self._cookies = cookies
+
+            def cookies(self):
+                return self._cookies
+
+            def close(self):
+                self.closed = True
+
+        class FakeChromium:
+            def __init__(self, context):
+                self._context = context
+
+            def launch_persistent_context(self, **kwargs):
+                self.launch_kwargs = kwargs
+                return self._context
+
+        class FakePlaywright:
+            def __init__(self, context):
+                self.chromium = FakeChromium(context)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        context = FakeContext(cookies)
+        sync_api = types.ModuleType("playwright.sync_api")
+        sync_api.sync_playwright = lambda: FakePlaywright(context)
+        pkg = types.ModuleType("playwright")
+        pkg.sync_api = sync_api
+        monkeypatch.setitem(sys.modules, "playwright", pkg)
+        monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+        return context
 
     def test_run_login_no_url_returns_error(self, capsys):
         from wikijs_mcp import login
@@ -348,7 +395,7 @@ class TestSessionAuthLoginCommand:
         monkeypatch.setattr(login, "_probe_login_url", lambda url: None)
         monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "jwt.abc.def")
 
-        rc = login.run_login([])
+        rc = login.run_login(["--manual"])
 
         assert rc == 0
         target = tmp_path / "session-token"
@@ -415,7 +462,7 @@ class TestSessionAuthLoginCommand:
         monkeypatch.setattr(login, "_probe_login_url", lambda url: None)
         monkeypatch.setattr(login.getpass, "getpass", lambda prompt: next(answers))
 
-        rc = login.run_login([])
+        rc = login.run_login(["--manual"])
 
         assert rc == 0
         assert (tmp_path / "session-token").read_text() == "jwt.after.retry"
@@ -430,7 +477,7 @@ class TestSessionAuthLoginCommand:
         monkeypatch.setattr(login, "_probe_login_url", lambda url: None)
         monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "   ")
 
-        rc = login.run_login([])
+        rc = login.run_login(["--manual"])
 
         assert rc == 2
         assert not (tmp_path / "session-token").exists()
@@ -447,7 +494,7 @@ class TestSessionAuthLoginCommand:
         # httpx probe is best-effort; make it inert here.
         monkeypatch.setattr(login, "_probe_login_url", lambda url: None)
 
-        rc = login.run_login(["--url", "wiki.example.com"])
+        rc = login.run_login(["--manual", "--url", "wiki.example.com"])
 
         assert rc == 0
         assert opened, "browser should be opened"
@@ -463,10 +510,104 @@ class TestSessionAuthLoginCommand:
         monkeypatch.setattr(login.webbrowser, "open", lambda url: True)
         monkeypatch.setattr(login.getpass, "getpass", lambda prompt: "jwt.abc.def")
 
-        rc = login.run_login(["--url", "https://wiki.example.com", "--no-open"])
+        rc = login.run_login(["--manual", "--url", "https://wiki.example.com", "--no-open"])
 
         assert rc == 0
         assert (tmp_path / "session-token").read_text() == "jwt.abc.def"
+
+    def test_run_login_auto_needs_playwright(self, tmp_path, monkeypatch, capsys):
+        """Without the optional playwright extra, the auto flow degrades."""
+        from wikijs_mcp import login
+
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(login, "_has_playwright", lambda: False)
+
+        rc = login.run_login(["--url", "https://wiki.example.com"])
+
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "playwright" in err.lower()
+        assert "--manual" in err
+        assert not (tmp_path / "session-token").exists()
+
+    def test_run_login_auto_captures_jwt_cookie(self, tmp_path, monkeypatch, capsys):
+        """The default flow drives the browser and captures the jwt cookie."""
+        from wikijs_mcp import login
+
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(login, "_has_playwright", lambda: True)
+
+        context = self._install_fake_playwright(
+            monkeypatch,
+            [
+                {"name": "session", "value": "s", "domain": ".wiki.example.com"},
+                {"name": "jwt", "value": "auto.jwt.token", "domain": ".wiki.example.com"},
+            ],
+        )
+
+        rc = login.run_login(["--url", "https://wiki.example.com", "--timeout", "5"])
+
+        assert rc == 0
+        target = tmp_path / "session-token"
+        assert target.read_text() == "auto.jwt.token"
+        assert (target.stat().st_mode & 0o777) == 0o600
+        out = capsys.readouterr().out
+        assert "wiki.example.com/login" in out
+        assert "Google Chrome" in out
+        assert context.closed is True
+
+    def test_run_login_auto_timeout_no_cookie(self, tmp_path, monkeypatch, capsys):
+        """No jwt cookie within the timeout -> nothing stored, nonzero exit."""
+        from wikijs_mcp import login
+
+        monkeypatch.setenv("WIKIJS_SESSION_TOKEN_FILE", str(tmp_path / "session-token"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(login, "_has_playwright", lambda: True)
+
+        self._install_fake_playwright(
+            monkeypatch,
+            [{"name": "session", "value": "s", "domain": ".wiki.example.com"}],
+        )
+
+        rc = login.run_login(["--url", "https://wiki.example.com", "--timeout", "0"])
+
+        assert rc == 2
+        assert "timeout" in capsys.readouterr().err.lower()
+        assert not (tmp_path / "session-token").exists()
+
+    def test_extract_jwt_cookie_prefers_wiki_domain(self):
+        from wikijs_mcp import login
+
+        class FakeCtx:
+            def cookies(self):
+                return [
+                    {"name": "jwt", "value": "other.jwt", "domain": ".other.example.net"},
+                    {"name": "session", "value": "s", "domain": ".wiki.example.com"},
+                    {"name": "jwt", "value": "wiki.jwt", "domain": ".wiki.example.com"},
+                ]
+
+        assert login._extract_jwt_cookie(FakeCtx(), "https://wiki.example.com") == "wiki.jwt"
+
+    def test_extract_jwt_cookie_falls_back_to_first(self):
+        from wikijs_mcp import login
+
+        class FakeCtx:
+            def cookies(self):
+                return [
+                    {"name": "jwt", "value": "only.jwt", "domain": ".other.example.net"},
+                ]
+
+        assert login._extract_jwt_cookie(FakeCtx(), "https://wiki.example.com") == "only.jwt"
+
+    def test_extract_jwt_cookie_none_when_absent(self):
+        from wikijs_mcp import login
+
+        class FakeCtx:
+            def cookies(self):
+                return [{"name": "session", "value": "s", "domain": ".wiki.example.com"}]
+
+        assert login._extract_jwt_cookie(FakeCtx(), "https://wiki.example.com") is None
 
 
 # ----------------------------------------------------------------------
