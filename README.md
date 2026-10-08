@@ -109,26 +109,31 @@ every API request with the browser session's `jwt` token — Wiki.js may return
 a refreshed token in the `new-jwt` response header, which the client adopts
 and persists automatically.
 
-### 1. Install the `login` extra (optional, only needed for the browser login)
+### 1. One-time browser login
 
 ```bash
-uv tool install . --extra login      # or: pip install 'wikijs-mcp[login]'
-playwright install chromium
+wikijs-mcp login --url https://your-wiki.com   # or rely on WIKIJS_URL
 ```
 
-### 2. One-time browser login
+The command opens `{url}/login` in **your standard browser** (no Playwright
+browser involved). Log in through SSO/Authentik there, then copy the session
+cookie:
 
-```bash
-wikijs-mcp login                     # uses WIKIJS_URL; add --url to override
-```
+1. Open the browser devtools (`F12`).
+2. *Application* → *Cookies* → your wiki host.
+3. Copy the value of the cookie named `jwt`.
+4. Paste it into the terminal prompt (input is hidden).
 
-The command opens a browser window at `{WIKIJS_URL}/login`. On setups that
-only expose OIDC the login page usually auto-redirects to Authentik or shows
-an SSO button — both work: the command simply waits until Wiki.js sets the
-`jwt` cookie and stores it:
+The token is stored at:
 
 ```
 ~/.config/wikijs-mcp/session-token   (chmod 600)
+```
+
+For scripts/CI, pipe the token instead of pasting it:
+
+```bash
+echo '<jwt>' | wikijs-mcp login --url https://your-wiki.com
 ```
 
 Inspect the current state (never prints the token itself):
@@ -137,12 +142,12 @@ Inspect the current state (never prints the token itself):
 wikijs-mcp session-status
 ```
 
-### 3. Configure the server for session auth
+### 2. Configure the server for session auth
 
 Set `WIKIJS_AUTH_MODE=session` and, optionally, the token via the
 `WIKIJS_SESSION_TOKEN` environment variable. Resolution precedence:
 **environment variable > token file**. With no env var the token file from
-step 2 is used automatically. The `new-jwt` renewal loop always re-saves into
+step 1 is used automatically. The `new-jwt` renewal loop always re-saves into
 the token file (an env var keeps taking precedence until you update it), so
 for long-lived setups prefer the token file and leave `WIKIJS_SESSION_TOKEN`
 unset.
