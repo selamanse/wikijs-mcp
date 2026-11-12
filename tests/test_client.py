@@ -1311,7 +1311,7 @@ class TestWikiJSClient:
     async def test_list_comments_default_locale(
         self, mock_wiki_config, sample_comment_list
     ):
-        """Test comment listing without an explicit locale (falls back to 'de')."""
+        """Test comment listing without an explicit locale (falls back to 'en')."""
         client = WikiJSClient(mock_wiki_config)
 
         client._execute_query = AsyncMock(
@@ -1322,7 +1322,7 @@ class TestWikiJSClient:
 
         call_args = client._execute_query.call_args
         variables = call_args[0][1]
-        assert variables["locale"] == "de"
+        assert variables["locale"] == "en"
         assert variables["path"] == "docs/test-page"
 
     async def test_list_comments_empty(self, mock_wiki_config):

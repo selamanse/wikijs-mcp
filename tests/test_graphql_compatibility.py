@@ -257,7 +257,7 @@ class TestGraphQLCompatibility:
         assert "authorEmail" not in query  # returns Forbidden on live instance
 
         # Both variables are always sent.
-        assert variables["locale"] == "de"
+        assert variables["locale"] == "en"
         assert variables["path"] == "docs/test-page"
 
     async def test_create_comment_query_structure(self, mock_wiki_config):
