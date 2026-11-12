@@ -1006,12 +1006,20 @@ class WikiJSClient:
         folder_id: int = 0,
         local_path: str | None = None,
         folder_path: str | None = None,
+        content: bytes | None = None,
+        filename: str | None = None,
     ) -> dict[str, Any]:
-        """Upload a local file as a wiki asset.
+        """Upload a file as a wiki asset.
 
         Uses the Wiki.js v2 multipart upload endpoint (``POST /u``) with the
         file field ``mediaUpload`` and the JSON metadata field ``mediaUpload``
         (``{"folderId": N}``). Requires the ``write:assets`` permission.
+
+        Provide exactly one of:
+          * ``local_path`` — a file readable by this process, or
+          * ``content`` (bytes) — inline file content; ``filename`` is then
+            required (the base name when ``local_path`` is also absent) and
+            preferred over the ``local_path`` base name for the asset name.
 
         ``folder_path`` (slash-separated, missing folders are created) takes
         precedence over ``folder_id`` when both are provided.
@@ -1022,11 +1030,28 @@ class WikiJSClient:
             + filename; just the filename for the root folder), ``url`` and a
             ready-to-paste ``markdownLink``.
         """
-        if not local_path:
-            raise ValueError("local_path must be provided.")
-        local_path = os.path.expanduser(local_path)
-        if not os.path.isfile(local_path):
-            raise FileNotFoundError(f"Local file not found: {local_path}")
+        has_path = bool(local_path and str(local_path).strip())
+        has_content = content is not None
+        if has_path == has_content:
+            raise ValueError(
+                "Provide exactly one of local_path or content (not both, "
+                "not neither)."
+            )
+
+        if has_path:
+            local_path = os.path.expanduser(str(local_path).strip())
+            if not os.path.isfile(local_path):
+                raise FileNotFoundError(f"Local file not found: {local_path}")
+            with open(local_path, "rb") as fh:
+                file_bytes = fh.read()
+            source_name = filename or os.path.basename(local_path)
+        else:
+            if not isinstance(content, bytes):
+                raise ValueError("content must be bytes.")
+            file_bytes = content
+            if not filename or not str(filename).strip():
+                raise ValueError("filename is required when uploading content.")
+            source_name = str(filename)
 
         if folder_path:
             resolved_id = await self.asset_folder_id(folder_path)
@@ -1039,12 +1064,11 @@ class WikiJSClient:
             folder_id = resolved_id
         folder_id = int(folder_id or 0)
 
-        with open(local_path, "rb") as fh:
-            file_bytes = fh.read()
-
-        filename = _sanitize_filename(os.path.basename(local_path))
+        filename = _sanitize_filename(source_name)
         if not filename:
-            raise ValueError(f"Could not derive a usable filename from: {local_path}")
+            raise ValueError(
+                f"Could not derive a usable filename from: {source_name}"
+            )
         mime = _mime_for_filename(filename)
 
         upload_url = f"{self.config.url.rstrip('/')}/u"

@@ -352,6 +352,40 @@ class TestUploadAsset:
                     3, str(tmp_path / "a.pdf"), folder_path="team"
                 )
 
+    async def test_upload_content_bytes_with_filename(self):
+        wiki = FakeWikiAssets()
+
+        async with make_client(wiki.handle) as client:
+            result = await client.upload_asset(
+                0, content=b"%PDF-1.4 inline", filename="Inline Note.PDF"
+            )
+
+        assert result["filename"] == "inline_note.pdf"
+        assert result["mime"] == "application/pdf"
+        assert result["assetPath"] == "inline_note.pdf"
+        assert len(wiki.upload_requests) == 1
+        request = wiki.upload_requests[0]
+        body = request.content.decode("latin-1")
+        assert 'name="mediaUpload"; filename="inline_note.pdf"' in body
+        assert "%PDF-1.4 inline" in body
+
+    async def test_upload_content_bytes_requires_filename(self):
+        wiki = FakeWikiAssets()
+
+        with pytest.raises(ValueError, match="filename is required"):
+            async with make_client(wiki.handle) as client:
+                await client.upload_asset(0, content=b"data")
+
+    async def test_upload_content_bytes_rejects_local_path_too(self, tmp_path):
+        wiki = FakeWikiAssets()
+        (tmp_path / "a.pdf").write_bytes(b"fake")
+
+        with pytest.raises(ValueError, match="exactly one of local_path"):
+            async with make_client(wiki.handle) as client:
+                await client.upload_asset(
+                    0, str(tmp_path / "a.pdf"), content=b"data", filename="a.pdf"
+                )
+
 
 @pytest.mark.unit
 class TestAssetCrud:

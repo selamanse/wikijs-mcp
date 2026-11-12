@@ -1922,8 +1922,87 @@ class TestWikiJSMCPServer:
             in response_text
         )
         mock_client_instance.upload_asset.assert_awaited_once_with(
-            0, "/tmp/report.pdf", folder_path="team/manuals"
+            0,
+            local_path="/tmp/report.pdf",
+            folder_path="team/manuals",
+            content=None,
+            filename=None,
         )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_upload_asset_inline_content(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Test wiki_upload_asset forwards inline base64 content + filename."""
+        import base64
+
+        mock_load_config.return_value = mock_wiki_config
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__.return_value = mock_client_instance
+        mock_client_instance.__aexit__.return_value = None
+        mock_client_instance.upload_asset.return_value = {
+            "filename": "inline_note.pdf",
+            "mime": "application/pdf",
+            "folderId": 0,
+            "assetPath": "inline_note.pdf",
+            "url": "https://wiki.example.com/inline_note.pdf",
+            "markdownLink": "[inline_note.pdf](https://wiki.example.com/inline_note.pdf)",
+        }
+        mock_client_class.return_value = mock_client_instance
+
+        server = WikiJSMCPServer()
+
+        payload = base64.b64encode(b"%PDF-1.4 inline content").decode("ascii")
+        result = await server.app.call_tool(
+            "wiki_upload_asset",
+            {
+                "content_base64": payload,
+                "filename": "Inline Note.pdf",
+                "folder_id": 0,
+            },
+        )
+        response_text = get_tool_response_text(result)
+        assert "Upload successful" in response_text
+        mock_client_instance.upload_asset.assert_awaited_once_with(
+            0,
+            local_path=None,
+            folder_path=None,
+            content=b"%PDF-1.4 inline content",
+            filename="Inline Note.pdf",
+        )
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_upload_asset_inline_content_requires_filename(
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Inline content without a filename is rejected with a hint."""
+        import base64
+
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        payload = base64.b64encode(b"data").decode("ascii")
+        result = await server.app.call_tool(
+            "wiki_upload_asset", {"content_base64": payload, "folder_id": 0}
+        )
+        assert "filename is required" in get_tool_response_text(result)
+
+    @patch("wikijs_mcp.server.WikiJSConfig.load_config")
+    @patch("wikijs_mcp.server.WikiJSClient")
+    async def test_call_tool_upload_asset_invalid_base64(  # noqa: B008,ARG001
+        self, mock_client_class, mock_load_config, mock_wiki_config
+    ):
+        """Malformed base64 content is reported without crashing."""
+        mock_load_config.return_value = mock_wiki_config
+        server = WikiJSMCPServer()
+
+        result = await server.app.call_tool(
+            "wiki_upload_asset",
+            {"content_base64": "not valid base64!!!", "filename": "a.pdf"},
+        )
+        assert "Invalid base64" in get_tool_response_text(result)
 
     @patch("wikijs_mcp.server.WikiJSConfig.load_config")
     @patch("wikijs_mcp.server.WikiJSClient")

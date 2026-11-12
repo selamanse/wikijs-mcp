@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import sys
@@ -558,32 +560,64 @@ class WikiJSMCPServer:
         @self.app.tool(
             description="Upload a local file to the wiki asset manager (Wiki.js multipart POST /u). Returns the sanitized filename, asset path, public URL and a ready-to-paste markdown link. Missing folders in folder_path are created on demand. Requires the write:assets permission."
         )
+        @self.app.tool(
+            description="Upload a file as a wiki asset. Pass a local_path the MCP "
+            "server can read, OR inline base64 file content (content_base64) plus "
+            "an optional filename — useful when the file lives on the client side. "
+            "Intended for files up to ~10 MB."
+        )
         async def wiki_upload_asset(
-            local_path: str,
+            local_path: str | None = None,
             folder_path: str | None = None,
             folder_id: int | None = None,
+            content_base64: str | None = None,
+            filename: str | None = None,
         ) -> str:
-            """Upload a local file as a wiki asset.
+            """Upload a file as a wiki asset.
 
             Args:
-                local_path: Local path of the file to upload (e.g. '/tmp/report.pdf')
+                local_path: Local path of the file to upload, as seen by the MCP
+                    server (e.g. '/tmp/report.pdf'). Ignored when content_base64
+                    is provided.
                 folder_path: Slash-separated asset folder path (e.g. 'team/manuals').
                     Missing folders are created automatically. Wiki.js lowercases
                     folder slugs. Use either folder_path or folder_id, not both.
                 folder_id: Numeric asset folder ID (0 = root). Ignored when
                     folder_path is provided.
+                content_base64: Base64-encoded file content sent inline. Use this
+                    when the file is not reachable from the MCP server's filesystem
+                    (e.g. the client has the bytes). Best for files up to ~10 MB.
+                filename: Name (with extension) to store the asset under. Required
+                    when content_base64 is used; otherwise defaults to the base name
+                    of local_path.
             """
-            if not local_path or not str(local_path).strip():
-                raise ValueError("local_path is required.")
             if folder_path and folder_id not in (None, 0):
                 raise ValueError(
                     "Provide either 'folder_path' or 'folder_id', not both."
                 )
 
+            content: bytes | None = None
+            if content_base64:
+                try:
+                    content = base64.b64decode(
+                        str(content_base64), validate=True
+                    )
+                except (ValueError, TypeError, binascii.Error) as exc:  # noqa: BLE001
+                    return f"❌ Invalid base64 content in content_base64: {exc}"
+                if not filename or not str(filename).strip():
+                    return (
+                        "❌ filename is required when uploading with "
+                        "content_base64."
+                    )
+
             async with self._wiki_client() as client:
                 try:
                     result = await client.upload_asset(
-                        folder_id or 0, local_path, folder_path=folder_path
+                        folder_id or 0,
+                        local_path=local_path,
+                        folder_path=folder_path,
+                        content=content,
+                        filename=filename,
                     )
                 except FileNotFoundError as exc:
                     return f"❌ Local file not found: {exc}"
